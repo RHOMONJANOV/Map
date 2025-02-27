@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗺️ Yaqin Joylarni Qidirish</title>
+
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(to right, #ffffff, #f2f2f2);
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+        h2 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 15px;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
+        }
+        .controls {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .input, .btn {
+            padding: 12px;
+            font-size: 16px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            outline: none;
+        }
+        .btn {
+            background: linear-gradient(45deg, #007bff, #0056b3);
+            color: white;
+            cursor: pointer;
+            transition: 0.3s;
+            font-weight: bold;
+            border: none;
+        }
+        .btn:hover { background: linear-gradient(45deg, #0056b3, #003d80); }
+        #map { height: 600px; width: 100%; border-radius: 10px; margin-top: 10px; }
+        #info {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.1);
+            margin-top: 10px;
+        }
+        #error {
+            color: red;
+            font-weight: bold;
+            display: none;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<h2>🗺️ Yaqin Joylarni Qidirish</h2>
+
+<div class="controls">
+    📍 <input class="input" type="text" id="location" placeholder="Manzilni kiriting yoki GPS yoqing">
+    🔍 <select class="input" id="distance">
+    <option value="5000">5 km</option>
+    <option value="10000" selected>10 km</option>
+    <option value="50000">50 km</option>
+</select>
+    <select class="input" id="placeType">
+        <option value="fuel">⛽ Zapravka</option>
+        <option value="restaurant">🍽️ Restoran</option>
+    </select>
+    <button class="btn" onclick="searchByAddress()">🔎 Qidirish</button>
+    <button class="btn" onclick="getLocation()">📍 GPS</button>
+</div>
+
+<div id="error">❌ Xatolik yuz berdi! Qayta urinib ko‘ring.</div>
+<div id="map"></div>
+<div id="info">📍 Ma’lumotlar shu yerda chiqadi...</div>
+
+<script>
+    var map = L.map('map').setView([41.2995, 69.2401], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    var markersLayer = L.layerGroup().addTo(map);
+    var routeControl = null;
+    var userMarker = null;
+
+    function searchByAddress() {
+        var locationInput = document.getElementById("location").value.trim();
+        document.getElementById("error").style.display = "none";
+
+        if (!locationInput) {
+            showError("❌ Iltimos, manzilni kiriting!");
+            return;
+        }
+
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(locationInput)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.length === 0) {
+                    showError("❌ Manzil topilmadi! Boshqa joyni kiriting.");
+                    return;
+                }
+                var lat = parseFloat(data[0].lat);
+                var lon = parseFloat(data[0].lon);
+                searchPlaces(lat, lon);
+            })
+            .catch(() => showError("Geokodlash xatoligi!"));
+    }
+
+    function searchPlaces(lat, lon) {
+        var distance = document.getElementById("distance").value;
+        var placeType = document.getElementById("placeType").value;
+        var query = placeType === "fuel" ? '["amenity"="fuel"]' : '["amenity"="restaurant"]';
+        var overpassQuery = `[out:json];node${query}(around:${distance},${lat},${lon});out;`;
+        var overpassUrl = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(overpassQuery);
+
+        map.setView([lat, lon], 13);
+        markersLayer.clearLayers();
+        if (routeControl) map.removeControl(routeControl);
+
+        if (userMarker) map.removeLayer(userMarker);
+        userMarker = L.marker([lat, lon], { icon: L.divIcon({ className: "marker-green", html: "📍" }) })
+            .addTo(map).bindPopup("Sizning joylashuvingiz!");
+
+        fetch(overpassUrl)
+            .then(response => response.json())
+            .then(data => {
+                if (data.elements.length === 0) {
+                    document.getElementById("info").innerHTML = "⚠️ Ushbu hududda joy topilmadi.";
+                } else {
+                    data.elements.forEach(place => {
+                        var slat = place.lat, slon = place.lon;
+                        var name = place.tags?.name || "Noma'lum joy";
+                        L.marker([slat, slon])
+                            .addTo(markersLayer)
+                            .bindPopup(`<b>${name}</b><br>
+                                <button class="btn" onclick="startNavigation(${lat}, ${lon}, ${slat}, ${slon})">🚗 Marshrut</button>`);
+                    });
+                }
+            })
+            .catch(() => showError("Xatolik yuz berdi!"));
+    }
+
+    function startNavigation(lat1, lon1, lat2, lon2) {
+        if (routeControl) map.removeControl(routeControl);
+        routeControl = L.Routing.control({
+            waypoints: [L.latLng(lat1, lon1), L.latLng(lat2, lon2)],
+            router: L.Routing.osrmv1({ serviceUrl: "https://router.project-osrm.org/route/v1" }),
+            lineOptions: { styles: [{ color: "blue", weight: 5 }] }
+        }).addTo(map);
+    }
+
+    function getLocation() {
+        navigator.geolocation.getCurrentPosition(
+            pos => searchPlaces(pos.coords.latitude, pos.coords.longitude),
+            () => showError("❌ GPS ishlamayapti!"));
+    }
+
+    function showError(msg) {
+        document.getElementById("error").innerHTML = msg;
+        document.getElementById("error").style.display = "block";
+    }
+</script>
+
+</body>
+</html>
